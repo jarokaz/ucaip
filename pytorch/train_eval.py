@@ -95,13 +95,12 @@ def get_model(num_layers, dropout_ratio, num_classes):
     return model
 
 
-def train_eval(device, model, train_dataloader, valid_dataloader, 
-               criterion, optimizer, scheduler, num_epochs, log_dir):
+def train_eval(device, model, train_dataloader, valid_dataloader,
+               criterion, optimizer, scheduler, num_epochs, writer=None):
     """
     Trains and evaluates a model.
     """
     since = time.time()
-    writer = SummaryWriter(log_dir)
 
     model = model.to(device)
 
@@ -111,10 +110,10 @@ def train_eval(device, model, train_dataloader, valid_dataloader,
     for epoch in range(1, num_epochs+1):
 
         # Training phase
-        model.train()  
+        model.train()
         num_train_examples = 0
         train_loss = 0.0
-       
+
         for inputs, labels in train_dataloader:
             inputs = inputs.to(device)
             labels = labels.to(device)
@@ -125,11 +124,11 @@ def train_eval(device, model, train_dataloader, valid_dataloader,
             optimizer.step()
 
             num_train_examples += inputs.size(0)
-            train_loss += loss.item() * inputs.size(0) 
+            train_loss += loss.item() * inputs.size(0)
         scheduler.step()
 
-        ## Validation phase
-        model.eval()   
+        # Validation phase
+        model.eval()
         num_val_examples = 0
         val_loss = 0
         val_corrects = 0
@@ -140,8 +139,9 @@ def train_eval(device, model, train_dataloader, valid_dataloader,
             outputs = model(inputs)
 
             num_val_examples += inputs.size(0)
-            val_loss += loss.item() * inputs.size(0) 
-            val_corrects += torch.sum(torch.eq(torch.max(outputs, 1)[1], labels))
+            val_loss += loss.item() * inputs.size(0)
+            val_corrects += torch.sum(torch.eq(torch.max(outputs, 1)
+                                               [1], labels))
 
         # Log epoch metrics
         train_loss = train_loss / num_train_examples
@@ -151,16 +151,16 @@ def train_eval(device, model, train_dataloader, valid_dataloader,
         print('Epoch: {}/{}, Training loss: {:.3f}, Validation loss: {:.3f}, Validation accuracy: {:.3f}'.format(
               epoch, num_epochs, train_loss, val_loss, val_acc))
 
-        writer.add_scalars(
-            'Loss', {'training': train_loss, 'validation': val_loss}, epoch)
-        writer.add_scalar('Validation accuracy', val_acc, epoch)
-        writer.flush()
+        # Write to Tensorboard
+        if writer:
+            writer.add_scalars(
+                'Loss', {'training': train_loss, 'validation': val_loss}, epoch)
+            writer.add_scalar('Validation accuracy', val_acc, epoch)
+            writer.flush()
 
         if val_acc > best_acc:
-           best_acc = val_acc
-           best_model_wts = copy.deepcopy(model.state_dict())
-    
-    writer.close()
+            best_acc = val_acc
+            best_model_wts = copy.deepcopy(model.state_dict())
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(
@@ -169,7 +169,7 @@ def train_eval(device, model, train_dataloader, valid_dataloader,
 
     # load best model weights
     model.load_state_dict(best_model_wts)
-    return model
+    return model, best_acc
 
 
 def get_args():
@@ -237,14 +237,32 @@ if __name__ == "__main__":
 
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=args.step_size, gamma=0.1)
 
     if args.log_dir is None:
         log_dir = 'gs://jk-tensorboards/experiments/333'
     else:
-        log_dir = args.log_dir       
+        log_dir = args.log_dir
 
     print(log_dir)
 
-    trained_model = train_eval(device, model, dataloaders['train'], dataloaders['val'],
-                               criterion, optimizer, scheduler, args.num_epochs, log_dir)
+    with SummaryWriter(log_dir) as writer:
+        # Add sample images to Tensorboard
+        images, _ = iter(dataloaders['train']).next()
+        img_grid = torchvision.utils.make_grid(images)
+        writer.add_image('Example images', img_grid)
+        # Add graph to Tensorboard
+        writer.add_graph(model, images)
+        # Train 
+        trained_model, accuracy = train_eval(device, model, dataloaders['train'], dataloaders['val'],
+                                             criterion, optimizer, scheduler, args.num_epochs, writer)
+        # Add final results and hyperparams to Tensorboard
+        writer.add_hparams({
+            'batch_size': args.batch_size,
+            'hidden_layers': args.num_layers,
+            'dropout_ratio': args.dropout_ratio
+        },
+            {
+            'hparam/accuracy': accuracy
+        })
