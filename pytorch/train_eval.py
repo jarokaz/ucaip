@@ -21,8 +21,6 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
@@ -53,13 +51,8 @@ def get_data(data_dir, batch_size):
             datasets.ImageFolder(root=os.path.join(data_dir, 'train'),
                                  transform=data_transforms['train']),
         'val':
-            datasets.ImageFolder(root=os.path.join(data_dir, 'val'),
+            datasets.ImageFolder(root=os.path.join(data_dir, 'validation'),
                                  transform=data_transforms['val'])
-    }
-
-    datasizes = {
-        'train': len(data['train']),
-        'val': len(data['val'])
     }
 
     dataloaders = {
@@ -71,7 +64,7 @@ def get_data(data_dir, batch_size):
 
     class_names = data['train'].classes
 
-    return dataloaders, datasizes, class_names
+    return dataloaders, class_names
 
 
 def get_model(num_layers, dropout_ratio, num_classes):
@@ -81,7 +74,7 @@ def get_model(num_layers, dropout_ratio, num_classes):
     """
 
     # Create the ResNet50 trunk
-    model = models.resnet50(pretrained=True)
+    model = models.resnet18(pretrained=True)
 
     # Get the number of input features to the default head
     num_features = model.fc.in_features
@@ -102,12 +95,11 @@ def get_model(num_layers, dropout_ratio, num_classes):
     return model
 
 
-def train_eval(device, train_dataloader, valid_dataloader, 
-               model, criterion, optimizer, num_epochs, log_dir='/tmp'):
+def train_eval(device, model, train_dataloader, valid_dataloader, 
+               criterion, optimizer, scheduler, num_epochs, log_dir):
     """
     Trains and evaluates a model.
     """
-
     since = time.time()
     writer = SummaryWriter(log_dir)
 
@@ -116,85 +108,73 @@ def train_eval(device, train_dataloader, valid_dataloader,
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
 
-    for epoch in range(num_epochs):
-        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-        print('-' * 10)
+    for epoch in range(1, num_epochs+1):
 
         # Training phase
         model.train()  
-        num_examples = 0
-        running_loss = 0.0
-        running_corrects = 0
-
+        num_train_examples = 0
+        train_loss = 0.0
+       
         for inputs, labels in train_dataloader:
-            optimizer.zero_grad()
             inputs = inputs.to(device)
             labels = labels.to(device)
+            optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
 
-            # Accumulate loss and accuracy
-            num_examples += inputs.shape(0)
-            running_loss += loss.item() * inputs.size(0) 
-            corrects = torch.sum(torch.eq(torch.max(outputs, dim=1)[1], labels))
-            running_corrects += corrects.item() 
+            num_train_examples += inputs.size(0)
+            train_loss += loss.item() * inputs.size(0) 
+        scheduler.step()
 
-        epoch_training_loss = running_loss / num_examples 
-        epoch_training_acc = running_corrects.double() / num_examples
-
-        # Validation phase
+        ## Validation phase
         model.eval()   
-        num_examples = 0
-        running_loss = 0.0
-        running_corrects = 0
+        num_val_examples = 0
+        val_loss = 0
+        val_corrects = 0
 
-        for inputes, labels in valid_dataloader:
+        for inputs, labels in valid_dataloader:
             inputs = inputs.to(device)
             labels = labels.to(device)
             outputs = model(inputs)
-            loss = criterion(outputs, labels)
 
-            # Accumulate loss and accuracy
-            num_examples += inputs.shape(0)
-            running_loss += loss.item() * inputs.size(0)
-            corrects = torch.sum(torch.eq(torch.max(outputs, dim=1)[1], labels)) 
-            running_corrects += corrects.item()
- 
-        epoch_valid_loss = running_loss / num_examples 
-        epoch_valid_acc = running_corrects.double() / num_examples
+            num_val_examples += inputs.size(0)
+            val_loss += loss.item() * inputs.size(0) 
+            val_corrects += torch.sum(torch.eq(torch.max(outputs, 1)[1], labels))
 
-        if epoch_valid_acc > best_acc:
-            best_acc = epoch_valid_acc
-            best_model_wts = copy.deepcopy(model.state_dict)
-           
         # Log epoch metrics
-        print('Training Loss: {:.4f} Acc: {:.4f}'.format(
-              epoch_training_loss, epoch_training_acc))
-        print('Validation Loss: {:.4f} Acc: {:.4f}'.format(
-              epoch_valid_loss, epoch_valid))
+        train_loss = train_loss / num_train_examples
+        val_loss = val_loss / num_val_examples
+        val_acc = val_corrects.double() / num_val_examples
 
-        # Write loss and accuracy to TensorBoard
-        writer.add_scalar('Loss/training', epoch_training_loss, epoch)
-        writer.add_scalar('Acc/training', epoch_training_acc, epoch)
-        writer.add_scalar('Loss/validation', epoch_validation_loss, epoch)
-        writer.add_scalar('Acc/validation', epoch_validation_acc, epoch)
+        print('Epoch: {}/{}, Training loss: {:.3f}, Validation loss: {:.3f}, Validation accuracy: {:.3f}'.format(
+              epoch, num_epochs, train_loss, val_loss, val_acc))
+
+        writer.add_scalars(
+            'Loss', {'training': train_loss, 'validation': val_loss}, epoch)
+        writer.add_scalar('Validation accuracy', val_acc, epoch)
         writer.flush()
+
+        if val_acc > best_acc:
+           best_acc = val_acc
+           best_model_wts = copy.deepcopy(model.state_dict())
     
+    writer.close()
+
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
     print('Best val Acc: {:4f}'.format(best_acc))
 
-    writer.close()
     # load best model weights
     model.load_state_dict(best_model_wts)
     return model
 
+
 def get_args():
     """
-    Returns parsed command line arguments
+    Returns parsed command line arguments.
     """
 
     parser = argparse.ArgumentParser()
@@ -205,19 +185,33 @@ def get_args():
         help='number of times to go through the data, default=20')
     parser.add_argument(
         '--batch-size',
-        default=128,
-        type=int,
-        help='number of records to read during each training step, default=128')
-    parser.add_argument(
-        '--num_layers',
         default=32,
         type=int,
-        help='number of hidden layers in the classification head , default=128')
+        help='number of records to read during each training step, default=32')
     parser.add_argument(
-        '--droput_ratio',
+        '--num-layers',
+        default=64,
+        type=int,
+        help='number of hidden layers in the classification head , default=64')
+    parser.add_argument(
+        '--dropout-ratio',
         default=0.5,
         type=float,
         help='dropout ration in the classification head , default=128')
+    parser.add_argument(
+        '--step-size',
+        default=7,
+        type=int,
+        help='step size of LR scheduler')
+    parser.add_argument(
+        '--data',
+        type=str,
+        required=True,
+        help='training data location')
+    parser.add_argument(
+        '--log-dir',
+        type=str,
+        help='directory for TensorBoard logs')
     parser.add_argument(
         '--verbosity',
         choices=['DEBUG', 'ERROR', 'FATAL', 'INFO', 'WARN'],
@@ -230,3 +224,27 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     print(args)
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print('-' * 10)
+    print(f'Training on device: {device}')
+
+    dataloaders, class_names = get_data(args.data, args.batch_size)
+    print(class_names)
+
+    model = get_model(args.num_layers, args.dropout_ratio, len(class_names))
+    print(model.fc)
+
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.1)
+
+    if args.log_dir is None:
+        log_dir = 'gs://jk-tensorboards/experiments/333'
+    else:
+        log_dir = args.log_dir       
+
+    print(log_dir)
+
+    trained_model = train_eval(device, model, dataloaders['train'], dataloaders['val'],
+                               criterion, optimizer, scheduler, args.num_epochs, log_dir)
