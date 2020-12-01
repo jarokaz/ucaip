@@ -18,6 +18,7 @@ import time
 import os
 import copy
 import matplotlib.pyplot as plt
+import zipfile
 
 import torch
 import torch.nn as nn
@@ -27,6 +28,52 @@ import torchvision
 from torchvision import datasets, models, transforms
 
 
+DEFAULT_ROOT = '/tmp'
+
+def get_catsanddogs(root):
+    """
+    Creates training and validation Datasets based on images
+    of cats and dogs from 
+    https://storage.googleapis.com/mledu-datasets/cats_and_dogs_filtered.zip.
+    """
+    
+    
+    # Download and extract the images
+    source_url = 'https://storage.googleapis.com/mledu-datasets/cats_and_dogs_filtered.zip'
+    local_filename = source_url.split('/')[-1]
+    datasets.utils.download_url(source_url, root, )
+    path_to_zip = os.path.join(root, local_filename)
+    with zipfile.ZipFile(path_to_zip, 'r') as zip_ref:
+        zip_ref.extractall(root)
+    
+    
+    # Create datasets
+    train_transforms = transforms.Compose([
+        transforms.RandomResizedCrop(256),
+        transforms.RandomHorizontalFlip(),
+        transforms.CenterCrop(size=224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+    
+    val_transforms = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+    
+    train_dataset = datasets.ImageFolder(
+        root=os.path.join(path_to_zip[:-4], 'train'),
+        transform=train_transforms)
+    
+    val_dataset = datasets.ImageFolder(
+        root=os.path.join(path_to_zip[:-4], 'validation'),
+        transform=val_transforms
+    )
+    
+    return train_dataset, val_dataset
+    
+    
+    
 def get_data(data_dir, batch_size):
     """Creates training and validation splits."""
 
@@ -204,13 +251,9 @@ def get_args():
         type=int,
         help='step size of LR scheduler')
     parser.add_argument(
-        '--data',
-        type=str,
-        required=True,
-        help='training data location')
-    parser.add_argument(
         '--log-dir',
         type=str,
+        default='/tmp',
         help='directory for TensorBoard logs')
     parser.add_argument(
         '--verbosity',
@@ -222,45 +265,48 @@ def get_args():
 
 
 if __name__ == "__main__":
+    
+    # Parse command line arguments
     args = get_args()
-    print(args)
-
+    
+    # Create train and validation dataloaders
+    train_dataset, val_dataset = get_catsanddogs(DEFAULT_ROOT)
+    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=True)
+    class_names = train_dataset.classes
+    
+    # Use GPU if available
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print('-' * 10)
     print(f'Training on device: {device}')
 
-    dataloaders, class_names = get_data(args.data, args.batch_size)
-    print(class_names)
-
+    # Configure training
     model = get_model(args.num_layers, args.dropout_ratio, len(class_names))
-    print(model.fc)
-
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=args.step_size, gamma=0.1)
 
-    if args.log_dir is None:
-        log_dir = 'gs://jk-tensorboards/experiments/333'
+    # Set location for the TensorBoard logs
+    if 'AIP_TENSORBOARD_LOG_DIR' in os.environ:
+        log_dir = os.environ['AIP_TENSORBOARD_LOG_DIR']
     else:
         log_dir = args.log_dir
 
-    print(log_dir)
-
     with SummaryWriter(log_dir) as writer:
-        # Add sample images to Tensorboard
-        images, _ = iter(dataloaders['train']).next()
+        # Add sample normalized images to Tensorboard
+        images, _ = iter(train_dataloader).next()
         img_grid = torchvision.utils.make_grid(images)
         writer.add_image('Example images', img_grid)
         # Add graph to Tensorboard
         writer.add_graph(model, images)
         # Train 
-        trained_model, accuracy = train_eval(device, model, dataloaders['train'], dataloaders['val'],
+        trained_model, accuracy = train_eval(device, model, train_dataloader, val_dataloader,
                                              criterion, optimizer, scheduler, args.num_epochs, writer)
         # Add final results and hyperparams to Tensorboard
         writer.add_hparams({
-            'batch_size': args.batch_size,
-            'hidden_layers': args.num_layers,
+            'batch_size': int(args.batch_size),
+            'hidden_layers': int(args.num_layers),
             'dropout_ratio': args.dropout_ratio
         },
             {
