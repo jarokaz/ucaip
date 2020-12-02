@@ -38,7 +38,6 @@ def get_catsanddogs(root):
     https://storage.googleapis.com/mledu-datasets/cats_and_dogs_filtered.zip.
     """
     
-    
     # Download and extract the images
     source_url = 'https://storage.googleapis.com/mledu-datasets/cats_and_dogs_filtered.zip'
     local_filename = source_url.split('/')[-1]
@@ -73,46 +72,6 @@ def get_catsanddogs(root):
     
     return train_dataset, val_dataset
     
-    
-    
-def get_data(data_dir, batch_size):
-    """Creates training and validation splits."""
-
-    data_transforms = {
-        'train': transforms.Compose([
-            transforms.RandomResizedCrop(256),
-            transforms.RandomHorizontalFlip(),
-            transforms.CenterCrop(size=224),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ]),
-        'val': transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
-    }
-
-    data = {
-        'train':
-            datasets.ImageFolder(root=os.path.join(data_dir, 'train'),
-                                 transform=data_transforms['train']),
-        'val':
-            datasets.ImageFolder(root=os.path.join(data_dir, 'validation'),
-                                 transform=data_transforms['val'])
-    }
-
-    dataloaders = {
-        'train':
-            DataLoader(data['train'], batch_size=batch_size, shuffle=True),
-        'val':
-            DataLoader(data['val'], batch_size=batch_size, shuffle=True)
-    }
-
-    class_names = data['train'].classes
-
-    return dataloaders, class_names
 
 
 def get_model(num_layers, dropout_ratio, num_classes):
@@ -210,7 +169,7 @@ def train_eval(device, model, train_dataloader, valid_dataloader,
             
         # Report to HyperTune
         hpt.report_hyperparameter_tuning_metric(
-            hyperparameter_metric_tag='accuracy'
+            hyperparameter_metric_tag='accuracy',
             metric_value=val_acc,
             global_step=epoch
         )
