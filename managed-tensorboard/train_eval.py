@@ -263,6 +263,21 @@ if __name__ == "__main__":
         log_dir = args.log_dir
 
     with SummaryWriter(log_dir) as writer:
+        # Add sample normalized images to Tensorboard
+        images, _ = iter(train_dataloader).next()
+        img_grid = torchvision.utils.make_grid(images)
+        writer.add_image('Example images', img_grid)
+        # Add graph to Tensorboard
+        writer.add_graph(model, images)
         trained_model, accuracy = train_eval(device, model, train_dataloader, val_dataloader,
                                              criterion, optimizer, scheduler, args.num_epochs, writer)
 
+        # Add final results and hyperparams to Tensorboard
+        writer.add_hparams({
+            'batch_size': args.batch_size,
+            'hidden_layers': args.num_layers,
+            'dropout_ratio': args.dropout_ratio
+        },
+            {
+            'hparam/accuracy': accuracy
+        })
