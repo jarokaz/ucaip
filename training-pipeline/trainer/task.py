@@ -50,23 +50,25 @@ def get_model(num_layers, dropout_ratio, num_classes):
     
     model = tf.keras.Model(inputs, outputs)
     
-    # Compile the model
+    return model
+
+
+def train_eval(model, train_ds, valid_ds, epochs):
+    """
+    Trains and evaluates a model.
+    """
+    
+        # Compile the model
     base_learning_rate = 0.0001
     model.compile(optimizer=tf.keras.optimizers.Adam(lr=base_learning_rate),
                   loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
                   metrics=['accuracy'])
     
-    return model
-
-
-def train_eval(model, train_dataset, eval_dataset, num_steps):
-    """
-    Trains and evaluates a model.
-    """
+    history = model.fit(train_ds,
+                        epochs=epochs,
+                        validation_data=valid_ds)
     
-    print('In train_eval')
-    
-    return
+    return history
 
 
 def get_datasets(batch_size):
@@ -94,12 +96,14 @@ def get_datasets(batch_size):
         image_size=(IMG_HEIGHT, IMG_WIDTH),
         batch_size=batch_size)
     
+    class_names = train_ds.class_names
+    
     AUTOTUNE = tf.data.experimental.AUTOTUNE
 
     train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
     valid_ds = valid_ds.prefetch(buffer_size=AUTOTUNE)
     
-    return train_ds, valid_ds
+    return train_ds, valid_ds, class_names
 
     
 def get_args():
