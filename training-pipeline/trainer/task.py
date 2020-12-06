@@ -134,6 +134,29 @@ if __name__ == "__main__":
     
    
     args = get_args()
+    
+    if 'AIP_DATA_FORMAT' in os.environ:
+        print('AIP_DATA_FORMAT={}'.format(os.environ['AIP_DATA_FORMAT']))
+    else:
+        print('AIP_DATA_FORMAT not set')
+        
+    if 'AIP_TRAINING_DATA_URI' in os.environ:
+        print('AIP_TRAINING_DATA_URI={}'.format(os.environ['AIP_TRAINING_DATA_URI']))
+    else:
+        print('AIP_TRAINING_DATA_URI not set')
+        
+    if 'AIP_VALIDATION_DATA_URI' in os.environ:
+        print('AIP_VALIDATION_DATA_URI={}'.format(os.environ['AIP_VALIDATION_DATA_URI']))
+    else:
+        print('AIP_DATA_FORMAT not set')
+        
+    if 'AIP_TEST_DATA_URI' in os.environ:
+        print('AIP_TEST_DATA_URI={}'.format(os.environ['AIP_TEST_DATA_URI']))
+    else:
+        print('AIP_TEST_DATA_URI not set')
+    
+    
+    exit()
                   
     # Check for GPU and set the strategy
     if tf.test.is_gpu_available():
