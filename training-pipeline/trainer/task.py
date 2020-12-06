@@ -59,7 +59,7 @@ def build_model(num_layers, dropout_ratio, num_classes):
     return model
 
 
-def get_datasets(batch_size):
+def get_datasets_v2(batch_size):
     """
     Creates training and validation splits as 
     tf.data datasets.
@@ -93,6 +93,15 @@ def get_datasets(batch_size):
     
     return train_ds, valid_ds, class_names
 
+
+def get_datasets(batch_size):
+    """
+    Creates training and validation splits as tf.data datasets
+    from an AI Platform Dataset passed by the training pipeline.
+    """
+    
+    return None
+    
     
 def get_args():
     """
@@ -132,31 +141,15 @@ def get_args():
 
 if __name__ == "__main__":
     
+    if 'AIP_DATA_FORMAT' not in os.environ:
+        raise RuntimeError('No dataset information available.')
+    else:
+        print('Processing AI Platform dataset')
    
+    exit()
+    
     args = get_args()
     
-    if 'AIP_DATA_FORMAT' in os.environ:
-        print('AIP_DATA_FORMAT={}'.format(os.environ['AIP_DATA_FORMAT']))
-    else:
-        print('AIP_DATA_FORMAT not set')
-        
-    if 'AIP_TRAINING_DATA_URI' in os.environ:
-        print('AIP_TRAINING_DATA_URI={}'.format(os.environ['AIP_TRAINING_DATA_URI']))
-    else:
-        print('AIP_TRAINING_DATA_URI not set')
-        
-    if 'AIP_VALIDATION_DATA_URI' in os.environ:
-        print('AIP_VALIDATION_DATA_URI={}'.format(os.environ['AIP_VALIDATION_DATA_URI']))
-    else:
-        print('AIP_DATA_FORMAT not set')
-        
-    if 'AIP_TEST_DATA_URI' in os.environ:
-        print('AIP_TEST_DATA_URI={}'.format(os.environ['AIP_TEST_DATA_URI']))
-    else:
-        print('AIP_TEST_DATA_URI not set')
-    
-    
-    exit()
                   
     # Check for GPU and set the strategy
     if tf.test.is_gpu_available():
