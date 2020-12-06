@@ -15,7 +15,7 @@ import argparse
 import os
 import time
 
-import hypertune
+#import hypertune
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -25,7 +25,7 @@ IMG_HEIGHT = 224
 IMG_WIDTH = 224
     
     
-def get_model(num_layers, dropout_ratio, num_classes):
+def build_model(num_layers, dropout_ratio, num_classes):
     """
     Creates a custom image classificatin model using ResNet50 
     as a base model.
@@ -39,7 +39,6 @@ def get_model(num_layers, dropout_ratio, num_classes):
                                                    pooling='avg')
     base_model.trainable = False
     
-    
     # Add preprocessing and classification head
     inputs = tf.keras.Input(shape=IMG_SHAPE)
     x = tf.keras.applications.mobilenet_v2.preprocess_input(inputs)
@@ -48,27 +47,16 @@ def get_model(num_layers, dropout_ratio, num_classes):
     x = tf.keras.layers.Dropout(dropout_ratio)(x)
     outputs = tf.keras.layers.Dense(num_classes)(x)
     
+    # Assemble the model
     model = tf.keras.Model(inputs, outputs)
     
-    return model
-
-
-def train_eval(model, train_ds, valid_ds, epochs):
-    """
-    Trains and evaluates a model.
-    """
-    
-        # Compile the model
+    # Compile the model
     base_learning_rate = 0.0001
     model.compile(optimizer=tf.keras.optimizers.Adam(lr=base_learning_rate),
                   loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
                   metrics=['accuracy'])
     
-    history = model.fit(train_ds,
-                        epochs=epochs,
-                        validation_data=valid_ds)
-    
-    return history
+    return model
 
 
 def get_datasets(batch_size):
@@ -133,19 +121,10 @@ def get_args():
         type=float,
         help='dropout ration in the classification head , default=128')
     parser.add_argument(
-        '--step-size',
-        default=7,
-        type=int,
-        help='step size of LR scheduler')
-    parser.add_argument(
-        '--log-dir',
+        '--model-dir',
         type=str,
-        default='/tmp',
-        help='directory for TensorBoard logs')
-    parser.add_argument(
-        '--verbosity',
-        choices=['DEBUG', 'ERROR', 'FATAL', 'INFO', 'WARN'],
-        default='INFO')
+        default='/tmp/saved_model',
+        help='model dir , default=/tmp/saved_model')
 
     args, _ = parser.parse_known_args()
     return args
@@ -153,6 +132,24 @@ def get_args():
 
 if __name__ == "__main__":
     
-    # Parse command line arguments
+   
     args = get_args()
+                  
+    # Check for GPU and set the strategy
+    if tf.test.is_gpu_available():
+        strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
+    else:
+        strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
+    
+    # Create the datasets and the model
+    train_ds, valid_ds, class_names = get_datasets(args.batch_size)
+    with strategy.scope():
+        model = build_model(args.num_layers, args.dropout_ratio, len(class_names))
+    print(model.summary())
+    
+    # Start training
+    history = model.fit(x=train_ds, 
+                        validation_data=valid_ds, 
+                        epochs=args.num_epochs)
+    model.save(args.model_dir)
 
