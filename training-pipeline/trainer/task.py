@@ -23,7 +23,8 @@ import tensorflow as tf
 
 IMG_HEIGHT = 224
 IMG_WIDTH = 224
-    
+AUTOTUNE = tf.data.experimental.AUTOTUNE
+
     
 def build_model(num_layers, dropout_ratio, num_classes):
     """
@@ -59,49 +60,120 @@ def build_model(num_layers, dropout_ratio, num_classes):
     return model
 
 
-def get_datasets_v2(batch_size):
-    """
-    Creates training and validation splits as 
-    tf.data datasets.
-    """
-    
-    url = 'https://storage.googleapis.com/download.tensorflow.org/example_images/flower_photos.tgz'
-    data_root = tf.keras.utils.get_file('flower_photos', origin=url, untar=True)
-    
-    train_ds = tf.keras.preprocessing.image_dataset_from_directory(
-        data_root,
-        validation_split=0.2,
-        subset='training',
-        seed=123,
-        image_size=(IMG_HEIGHT, IMG_WIDTH),
-        batch_size=batch_size)
-    
-    valid_ds = tf.keras.preprocessing.image_dataset_from_directory(
-        data_root,
-        validation_split=0.2,
-        subset='validation',
-        seed=123,
-        image_size=(IMG_HEIGHT, IMG_WIDTH),
-        batch_size=batch_size)
-    
-    class_names = train_ds.class_names
-    
-    AUTOTUNE = tf.data.experimental.AUTOTUNE
+def image_dataset_from_aip_jsonl(pattern, class_names=None, img_height=224, img_width=224):
+        """
+        Generates a `tf.data.Dataset` from a set of JSONL files
+        in the AI Platform image dataset index format. 
+        
+        Arguments:
+            pattern: A wildcard pattern for a list of JSONL files.
+                E.g. gs://bucket/folder/training-*.
+            class_names: the list of class names that are expected
+                in the passed index. 
+            img_height: The height of a generated image
+            img_width: The width of a generated image
+            
+        """
+        
+        def _get_label(class_name):
+            """
+            Converts a string class name to an integer label.
+            """
+            one_hot = class_name == class_names
+            return tf.argmax(one_hot)
+        
+        def _decode_img(file_path):
+            """
+            Loads an image and converts it to a resized 3D tensor.
+            """
+            
+            img = tf.io.read_file(file_path)
+            img = tf.io.decode_image(img, 
+                                     expand_animations=False)
+            img = tf.image.resize(img, [img_height, img_width])
+            
+            return img
+            
+        def _process_example(file_path, class_name):
+            """
+            Creates a converted image and a class label from
+            an image path and class name.
+            """
+            
+            label = _get_label(class_name)
+            img = _decode_img(file_path)
+            
+            return img, label
+        
+        # Read the JSONL index to a pandas DataFrame
+        df = pd.concat(
+            [pd.read_json(path, lines=True) for path in tf.io.gfile.glob(pattern)],
+            ignore_index=True
+        )
+        
+        # Parse classifcationAnnotations field
+        df = pd.concat(
+            [df, pd.json_normalize(df['classificationAnnotations'].apply(pd.Series)[0])], axis=1)
+        
+        paths = df['imageGcsUri'].values
+        labels = df['displayName'].values
+        inferred_class_names = np.unique(labels)
+        
+        if class_names is not None:
+            class_names = np.array(class_names).astype(str)
+            if set(inferred_class_names) != set(class_names):
+                raise ValueError(
+                    'The `class_names` passed does not match the '
+                    'names in the image index '
+                    'Expected: %s, received %s' %
+                    (inferred_class_names, class_names))
+            
+        class_names = tf.constant(inferred_class_names)
+        
+        dataset = tf.data.Dataset.from_tensor_slices((paths, labels))
+        dataset = dataset.shuffle(len(labels), reshuffle_each_iteration=False)
+        dataset = dataset.map(_process_example, num_parallel_calls=AUTOTUNE)
+        dataset.class_names = class_names
+        
+        return dataset
 
-    train_ds = train_ds.prefetch(buffer_size=AUTOTUNE)
-    valid_ds = valid_ds.prefetch(buffer_size=AUTOTUNE)
-    
-    return train_ds, valid_ds, class_names
 
-
-def get_datasets(batch_size):
+def get_datasets(batch_size, img_height, img_width):
     """
     Creates training and validation splits as tf.data datasets
     from an AI Platform Dataset passed by the training pipeline.
     """
     
-    return None
+    def _configure_for_performance(ds):
+        """
+        Optimizes the performance of a dataset.
+        """
+        ds = ds.cache()
+        ds = ds.prefetch(buffer_size=AUTOTUNE)
+        return ds
     
+    if  os.environ['AIP_DATA_FORMAT'] != 'jsonl':
+        raise RuntimeError('Wrong dataset format: {}. Expecting - jsonl'.format(
+            os.environ['AIP_DATA_FORMAT']))
+        
+    train_ds = image_dataset_from_aip_jsonl(
+        pattern=os.environ['AIP_TRAINING_DATA_URI'],
+        img_height=img_height,
+        img_width=img_width)
+    
+    class_names = train_ds.class_names.numpy()
+        
+    valid_ds = image_dataset_from_aip_jsonl(
+        pattern=os.environ['AIP_VALIDATION_DATA_URI'],
+        class_names=class_names,
+        img_height=img_height,
+        img_width=img_width)
+    
+    train_ds = _configure_for_performance(train_ds.batch(batch_size))
+    valid_ds = _configure_for_performance(valid_ds.batch(batch_size))
+    
+    return train_ds, valid_ds, class_names
+        
     
 def get_args():
     """
@@ -143,29 +215,20 @@ if __name__ == "__main__":
     
     if 'AIP_DATA_FORMAT' not in os.environ:
         raise RuntimeError('No dataset information available.')
-    else:
-        print('Processing AI Platform dataset')
    
-    exit()
-    
     args = get_args()
     
-                  
-    # Check for GPU and set the strategy
-    if tf.test.is_gpu_available():
-        strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
-    else:
-        strategy = tf.distribute.OneDeviceStrategy(device="/cpu:0")
-    
     # Create the datasets and the model
-    train_ds, valid_ds, class_names = get_datasets(args.batch_size)
-    with strategy.scope():
-        model = build_model(args.num_layers, args.dropout_ratio, len(class_names))
+    train_ds, valid_ds, class_names = get_datasets(args.batch_size, IMG_HEIGHT, IMG_WIDTH)
+    model = build_model(args.num_layers, args.dropout_ratio, len(class_names))
     print(model.summary())
     
     # Start training
     history = model.fit(x=train_ds, 
                         validation_data=valid_ds, 
                         epochs=args.num_epochs)
+    
+    # Save the model
+    print('Saving the model to: {}'.format(args.model_dir))
     model.save(args.model_dir)
 
