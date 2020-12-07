@@ -229,6 +229,10 @@ if __name__ == "__main__":
                         epochs=args.num_epochs)
     
     # Save the model
-    print('Saving the model to: {}'.format(args.model_dir))
-    model.save(args.model_dir)
+    if 'AIP_MODEL_DIR' in os.environ:
+        model_dir = os.environ['AIP_MODEL_DIR']
+    else:
+        model_dir = args.model_dir
+    print('Saving the model to: {}'.format(model_dir))
+    model.save(model_dir)
 
