@@ -1,10 +1,10 @@
 Metadata-Version: 1.0
-Name: UNKNOWN
+Name: Hyperparameter Tuning - CIFAR10
 Version: 0.0.0
-Summary: Demostration training script
+Summary: Demostration hyperparameter tuning script
 Home-page: www.google.com
 Author: Google
-Author-email: UNKNOWN
+Author-email: aferlitsch@gmail.com
 License: Public
 Description: Demo
 Platform: AI Platform (Unified)
