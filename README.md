@@ -1,2 +1,2 @@
-# Code samples and code snippets for Unified Cloud AI Platform
+# Code samples and code snippets for Cloud AI Platform (Unified)
 
