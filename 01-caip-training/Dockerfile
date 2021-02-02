@@ -1,5 +1,5 @@
 
-FROM gcr.io/deeplearning-platform-release/tf2-gpu.2-3
+FROM gcr.io/deeplearning-platform-release/tf2-gpu.2-4
 
 RUN pip install -U 'h5py<3.0.0'
 
