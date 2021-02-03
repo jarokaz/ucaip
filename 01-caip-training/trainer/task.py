@@ -211,7 +211,7 @@ def get_args():
     return args
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     
     if 'AIP_DATA_FORMAT' not in os.environ:
         raise RuntimeError('No dataset information available.')
