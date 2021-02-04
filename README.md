@@ -11,7 +11,7 @@ The AI Platform (Unified) Python client library should be installed to the defau
 From the Jupyter terminal:
 
 ```
-pip install -U --user google-cloud-aiplatform
+
 ```
 
 ### Installing AI Platorm Pipelines and ML etadata SDKs
