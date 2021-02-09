@@ -42,8 +42,9 @@ def build_model(num_layers, dropout_ratio, num_classes):
     base_model.trainable = False
     
     # Add preprocessing and classification head
-    inputs = tf.keras.Input(shape=IMG_SHAPE, name='images')
-    x = tf.keras.applications.mobilenet_v2.preprocess_input(inputs)
+    inputs = tf.keras.Input(shape=IMG_SHAPE, name='images', dtype = tf.uint8)
+    x = tf.cast(inputs, tf.float32)
+    x = tf.keras.applications.resnet50.preprocess_input(x)
     x = base_model(x)
     x = tf.keras.layers.Dense(num_layers, activation='relu')(x)
     x = tf.keras.layers.Dropout(dropout_ratio)(x)
@@ -92,6 +93,7 @@ def image_dataset_from_aip_jsonl(pattern, class_names=None, img_height=224, img_
             img = tf.io.decode_image(img, 
                                      expand_animations=False)
             img = tf.image.resize(img, [img_height, img_width])
+            img = tf.cast(img, tf.uint8)
             
             return img
             
