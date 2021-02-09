@@ -24,6 +24,7 @@ import tensorflow as tf
 IMG_HEIGHT = 224
 IMG_WIDTH = 224
 AUTOTUNE = tf.data.experimental.AUTOTUNE
+LOCAL_LOG_DIR = '/tmp/logs'
 
     
 def build_model(num_layers, dropout_ratio, num_classes):
@@ -41,7 +42,7 @@ def build_model(num_layers, dropout_ratio, num_classes):
     base_model.trainable = False
     
     # Add preprocessing and classification head
-    inputs = tf.keras.Input(shape=IMG_SHAPE)
+    inputs = tf.keras.Input(shape=IMG_SHAPE, name='images')
     x = tf.keras.applications.mobilenet_v2.preprocess_input(inputs)
     x = base_model(x)
     x = tf.keras.layers.Dense(num_layers, activation='relu')(x)
@@ -123,7 +124,7 @@ def image_dataset_from_aip_jsonl(pattern, class_names=None, img_height=224, img_
             class_names = np.array(class_names).astype(str)
             if set(inferred_class_names) != set(class_names):
                 raise ValueError(
-                    'The `class_names` passed does not match the '
+                    'The `class_names` passed do not match the '
                     'names in the image index '
                     'Expected: %s, received %s' %
                     (inferred_class_names, class_names))
@@ -177,7 +178,7 @@ def get_datasets(batch_size, img_height, img_width):
     
 def get_args():
     """
-    Returns parsed command line arguments
+    Returns parsed command line arguments.
     """
     
     parser = argparse.ArgumentParser()
@@ -211,10 +212,33 @@ def get_args():
     return args
 
 
+def copy_tensorboard_logs(local_path: str, gcs_path: str):
+    """Copies Tensorboard logs from a local dir to a GCS location.
+    
+    After training, batch copy Tensorboard logs locally to a GCS location. This can result
+    in faster pipeline runtimes over streaming logs per batch to GCS that can get bottlenecked
+    when streaming large volumes.
+    
+    Args:
+      local_path: local filesystem directory uri.
+      gcs_path: cloud filesystem directory uri.
+    Returns:
+      None.
+    """
+    pattern = '{}/*/events.out.tfevents.*'.format(local_path)
+    local_files = tf.io.gfile.glob(pattern)
+    gcs_log_files = [local_file.replace(local_path, gcs_path) for local_file in local_files]
+    for local_file, gcs_file in zip(local_files, gcs_log_files):
+        tf.io.gfile.copy(local_file, gcs_file)
+
+
 if __name__ == '__main__':
     
     if 'AIP_DATA_FORMAT' not in os.environ:
         raise RuntimeError('No dataset information available.')
+        
+    # Configure TensorBoard callback
+    callbacks = [tf.keras.callbacks.TensorBoard(log_dir=LOCAL_LOG_DIR, update_freq='batch')]
    
     args = get_args()
     
@@ -226,13 +250,19 @@ if __name__ == '__main__':
     # Start training
     history = model.fit(x=train_ds, 
                         validation_data=valid_ds, 
-                        epochs=args.num_epochs)
+                        epochs=args.num_epochs,
+                        callbacks=callbacks)
     
-    # Save the model
+    # Configure locations for SavedModel and TB logs
     if 'AIP_MODEL_DIR' in os.environ:
         model_dir = os.environ['AIP_MODEL_DIR']
     else:
         model_dir = args.model_dir
+    tb_dir = f'{model_dir}/logs'
+    
+    # Save the model
     print('Saving the model to: {}'.format(model_dir))
     model.save(model_dir)
-
+    
+    # Copy Tensorboard logs to GCS
+    copy_tensorboard_logs(LOCAL_LOG_DIR, tb_dir)
