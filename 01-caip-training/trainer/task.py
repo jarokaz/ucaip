@@ -23,8 +23,12 @@ import tensorflow as tf
 
 IMG_HEIGHT = 224
 IMG_WIDTH = 224
+IMG_SHAPE = (IMG_HEIGHT, IMG_WIDTH, 3)
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 LOCAL_LOG_DIR = '/tmp/logs'
+PROBABILITIES_KEY = 'probabilities'
+LABELS_KEY = 'labels'
+NUM_LABELS = 3
 
     
 def build_model(num_layers, dropout_ratio, num_classes):
@@ -34,7 +38,6 @@ def build_model(num_layers, dropout_ratio, num_classes):
     """
     
     # Create the base model
-    IMG_SHAPE = (IMG_HEIGHT, IMG_WIDTH, 3)
     base_model = tf.keras.applications.ResNet50(input_shape=IMG_SHAPE,
                                                    include_top=False,
                                                    weights='imagenet',
@@ -42,7 +45,7 @@ def build_model(num_layers, dropout_ratio, num_classes):
     base_model.trainable = False
     
     # Add preprocessing and classification head
-    inputs = tf.keras.Input(shape=IMG_SHAPE, name='images', dtype = tf.uint8)
+    inputs = tf.keras.Input(shape=IMG_SHAPE, dtype = tf.uint8)
     x = tf.cast(inputs, tf.float32)
     x = tf.keras.applications.resnet50.preprocess_input(x)
     x = base_model(x)
@@ -178,6 +181,66 @@ def get_datasets(batch_size, img_height, img_width):
     return train_ds, valid_ds, class_names
         
     
+class ServingModule(tf.Module):
+    """
+    A custom tf.Module that adds a serving signature with image preprocessing
+    and prediction postprocessing to the trained model.
+    """
+
+    def __init__(self, base_model, output_labels):
+        super(ServingModule, self).__init__()
+        self._model = base_model
+        self._output_labels = tf.constant(output_labels, dtype=tf.string)
+
+    def _decode_and_scale(self, raw_image):
+        """
+        Decodes, and resizes a single raw image.
+        """
+        
+        image = tf.image.decode_image(raw_image, expand_animations=False)
+        image = tf.image.resize(image, [IMG_HEIGHT, IMG_WIDTH])
+        image = tf.cast(image, tf.uint8)
+        return image
+    
+    def _preprocess(self, raw_images):
+        """
+        Preprocesses raw inputs as sent by the client.
+        """
+        
+        # A mitigation for https://github.com/tensorflow/tensorflow/issues/28007
+        with tf.device('/cpu:0'):
+            images = tf.map_fn(self._decode_and_scale, raw_images, 
+                               dtype=tf.uint8, back_prop=False)
+        
+        return images
+        
+    def _postprocess(self, model_outputs):
+        """
+        Postprocesses outputs returned by the base model.
+        """
+        
+        probabilities = tf.nn.softmax(model_outputs)
+        indices = tf.argsort(probabilities, axis=1, direction='DESCENDING')
+        
+        return {
+            LABELS_KEY: tf.gather(self._output_labels, indices, axis=-1)[:,:NUM_LABELS],
+            PROBABILITIES_KEY: tf.sort(probabilities, direction='DESCENDING')[:,:NUM_LABELS]
+        }
+        
+
+    @tf.function(input_signature=[tf.TensorSpec([None], tf.string)])
+    def __call__(self, bytes_inputs):
+        """
+        Preprocesses inputs, calls the base model 
+        and postprocesses outputs from the base model.
+        """
+        
+        images = self._preprocess(bytes_inputs)
+        logits = self._model(images)
+        outputs = self._postprocess(logits)                         
+        return outputs
+
+    
 def get_args():
     """
     Returns parsed command line arguments.
@@ -262,9 +325,14 @@ if __name__ == '__main__':
         model_dir = args.model_dir
     tb_dir = f'{model_dir}/logs'
     
-    # Save the model
+    # Save the serving SavedModel
     print('Saving the model to: {}'.format(model_dir))
-    model.save(model_dir)
+    serving_module = ServingModule(model, class_names)
+    signatures = {
+        'serving_default': serving_module.__call__.get_concrete_function()
+    
+    }
+    tf.saved_model.save(serving_module, model_dir, signatures=signatures)
     
     # Copy Tensorboard logs to GCS
     copy_tensorboard_logs(LOCAL_LOG_DIR, tb_dir)
