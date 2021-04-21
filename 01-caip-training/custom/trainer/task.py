@@ -1,9 +1,8 @@
 # Single, Mirror and Multi-Machine Distributed Training for CIFAR-10
-  
+
 import tensorflow_datasets as tfds
 import tensorflow as tf
 from tensorflow.python.client import device_lib
-import numpy as np
 import argparse
 import os
 import sys
@@ -13,13 +12,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model-dir', dest='model_dir',
                     default=os.getenv('AIP_MODEL_DIR'), type=str, help='Model dir.')
 parser.add_argument('--lr', dest='lr',
-                    default=0.001, type=float,
+                    default=0.01, type=float,
                     help='Learning rate.')
 parser.add_argument('--epochs', dest='epochs',
-                    default=20, type=int,
+                    default=10, type=int,
                     help='Number of epochs.')
 parser.add_argument('--steps', dest='steps',
-                    default=100, type=int,
+                    default=200, type=int,
                     help='Number of steps per epoch.')
 parser.add_argument('--distribute', dest='distribute', type=str, default='single',
                     help='distributed training strategy')
@@ -28,6 +27,7 @@ args = parser.parse_args()
 print('Python Version = {}'.format(sys.version))
 print('TensorFlow Version = {}'.format(tf.__version__))
 print('TF_CONFIG = {}'.format(os.environ.get('TF_CONFIG', 'Not found')))
+print('DEVICES', device_lib.list_local_devices())
 
 # Single Machine, single compute device
 if args.distribute == 'single':
@@ -45,46 +45,50 @@ elif args.distribute == 'multi':
 # Multi-worker configuration
 print('num_replicas_in_sync = {}'.format(strategy.num_replicas_in_sync))
 
-def make_dataset():
-  # Scaling Boston Housing data features
-  def scale(feature):
-    max = np.max(feature)
-    feature = (feature / max).astype(np.float)
-    return feature
+# Preparing dataset
+BUFFER_SIZE = 10000
+BATCH_SIZE = 64
 
-  (x_train, y_train), (x_test, y_test) = tf.keras.datasets.boston_housing.load_data(
-    path="boston_housing.npz", test_split=0.2, seed=113
-  )
-  for _ in range(13):
-    x_train[_] = scale(x_train[_])
-    x_test[_] = scale(x_test[_])
-  return (x_train, y_train), (x_test, y_test)
+def make_datasets_unbatched():
+  # Scaling CIFAR10 data from (0, 255] to (0., 1.]
+  def scale(image, label):
+    image = tf.cast(image, tf.float32)
+    image /= 255.0
+    return image, label
+
+  datasets, info = tfds.load(name='cifar10',
+                            with_info=True,
+                            as_supervised=True)
+  return datasets['train'].map(scale).cache().shuffle(BUFFER_SIZE).repeat()
+
 
 # Build the Keras model
-def build_and_compile_dnn_model():
+def build_and_compile_cnn_model():
   model = tf.keras.Sequential([
-      tf.keras.layers.Dense(128, activation='relu', input_shape=(13,)),
-      tf.keras.layers.Dense(128, activation='relu'),
-      tf.keras.layers.Dense(1, activation='linear')
+      tf.keras.layers.Conv2D(32, 3, activation='relu', input_shape=(32, 32, 3)),
+      tf.keras.layers.MaxPooling2D(),
+      tf.keras.layers.Conv2D(32, 3, activation='relu'),
+      tf.keras.layers.MaxPooling2D(),
+      tf.keras.layers.Flatten(),
+      tf.keras.layers.Dense(10, activation='softmax')
   ])
   model.compile(
-      loss='mse',
-      optimizer=tf.keras.optimizers.RMSprop(learning_rate=args.lr))
+      loss=tf.keras.losses.sparse_categorical_crossentropy,
+      optimizer=tf.keras.optimizers.SGD(learning_rate=args.lr),
+      metrics=['accuracy'])
   return model
 
 # Train the model
 NUM_WORKERS = strategy.num_replicas_in_sync
 # Here the batch size scales up by number of workers since
 # `tf.data.Dataset.batch` expects the global batch size.
-BATCH_SIZE = 16
 GLOBAL_BATCH_SIZE = BATCH_SIZE * NUM_WORKERS
+train_dataset = make_datasets_unbatched().batch(GLOBAL_BATCH_SIZE)
 
 with strategy.scope():
   # Creation of dataset, and model building/compiling need to be within
   # `strategy.scope()`.
-  model = build_and_compile_dnn_model()
+  model = build_and_compile_cnn_model()
 
-# Train the model
-(x_train, y_train), (x_test, y_test) = make_dataset()
-model.fit(x_train, y_train, epochs=args.epochs, batch_size=GLOBAL_BATCH_SIZE)
+model.fit(x=train_dataset, epochs=args.epochs, steps_per_epoch=args.steps)
 model.save(args.model_dir)
